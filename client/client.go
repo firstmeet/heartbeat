@@ -9,15 +9,23 @@ import (
 )
 
 type HeartBeat interface {
-	HeartBeat(fns ...Handle)
+	HeartBeat()
 }
 
+const (
+	DefaultMaxFailed = 5
+	PingInterval     = 3
+	RangeInterval    = 2
+)
+
 type Server struct {
-	Conn      net.Conn
-	Connected bool
-	Fail      uint8
-	Mutex     sync.Mutex
-	Address   string
+	Conn         net.Conn
+	Connected    bool
+	Fail         uint8
+	Mutex        sync.Mutex
+	Address      string
+	MaxFailed    uint8
+	FailCallBack Handle
 }
 type Handle func(server *Server)
 
@@ -25,14 +33,15 @@ func StartClient(ports []int) {
 	var servers []*Server
 	for _, port := range ports {
 		server := &Server{
-			Address: fmt.Sprintf(":%d", port),
-			Mutex:   sync.Mutex{},
-			Fail:    0,
-			Conn:    nil,
+			Address:   fmt.Sprintf(":%d", port),
+			Mutex:     sync.Mutex{},
+			Fail:      0,
+			Conn:      nil,
+			MaxFailed: DefaultMaxFailed,
 		}
 		servers = append(servers, server)
 	}
-	ticker := time.NewTicker(2 * time.Second)
+	ticker := time.NewTicker(RangeInterval * time.Second)
 	defer ticker.Stop()
 
 	for range ticker.C {
@@ -41,18 +50,16 @@ func StartClient(ports []int) {
 			fn := func(server2 *Server) {
 				fmt.Printf("Server %s is down\n", server2.Address)
 			}
-			heartBeat = server
-			heartBeat.HeartBeat(fn)
+			server.FailCallBack = fn
+			heartBeat.HeartBeat()
 		}
 	}
 
 }
-func (s *Server) HeartBeat(handles ...Handle) {
-	if s.Fail >= 5 {
-		if len(handles) > 0 {
-			for _, handle := range handles {
-				handle(s)
-			}
+func (s *Server) HeartBeat() {
+	if s.Fail >= s.MaxFailed {
+		if s.FailCallBack != nil {
+			s.FailCallBack(s)
 		}
 	}
 	if !s.Connected {
@@ -80,7 +87,7 @@ func (s *Server) disconnect() {
 	s.Connected = false
 }
 func (s *Server) sendMsg() {
-	ticker := time.NewTicker(3 * time.Second)
+	ticker := time.NewTicker(PingInterval * time.Second)
 	defer ticker.Stop()
 	for range ticker.C {
 		err := s.ping()
@@ -94,7 +101,7 @@ func (s *Server) sendMsg() {
 func (s *Server) ping() error {
 	_, err := s.Conn.Write([]byte("ping\n"))
 	if err != nil {
-		s.Fail++
+		s.incrementFail()
 		return err
 	}
 	return nil
@@ -110,8 +117,22 @@ func (s *Server) receive() {
 		}
 		if string(line) == "pong" {
 			fmt.Printf("%s received pong\n", s.Address)
-			s.Fail = 0
+			s.resetFail()
 			s.Connected = true
 		}
 	}
+}
+
+//increment fail
+func (s *Server) incrementFail() {
+	s.Mutex.Lock()
+	defer s.Mutex.Unlock()
+	s.Fail++
+}
+
+//reset fail
+func (s *Server) resetFail() {
+	s.Mutex.Lock()
+	defer s.Mutex.Unlock()
+	s.Fail = 0
 }

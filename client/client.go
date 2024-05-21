@@ -28,16 +28,21 @@ type Server struct {
 	FailCallBack Handle
 }
 type Handle func(server *Server)
+type Option func(server *Server)
 
 func StartClient(ports []int) {
 	var servers []*Server
 	for _, port := range ports {
-		server := &Server{
-			Address:   fmt.Sprintf(":%d", port),
-			Mutex:     sync.Mutex{},
-			Fail:      0,
-			Conn:      nil,
-			MaxFailed: DefaultMaxFailed,
+		server := NewServer(
+			SetAddress(fmt.Sprintf("localhost:%d", port)),
+			SetMaxFailed(5),
+			SetFailCallBack(func(server *Server) {
+				fmt.Printf("Server %s is down\n ", server.Address)
+			}),
+		)
+		if server.Address == "" {
+			fmt.Println("No address set for server")
+			return
 		}
 		servers = append(servers, server)
 	}
@@ -47,15 +52,41 @@ func StartClient(ports []int) {
 	for range ticker.C {
 		for _, server := range servers {
 			var heartBeat HeartBeat
-			fn := func(server2 *Server) {
-				fmt.Printf("Server %s is down\n", server2.Address)
-			}
-			server.FailCallBack = fn
+			heartBeat = server
 			heartBeat.HeartBeat()
 		}
 	}
 
 }
+func NewServer(options ...Option) *Server {
+	server := &Server{}
+	if len(options) == 0 {
+		server.MaxFailed = DefaultMaxFailed
+		return server
+	}
+	for _, option := range options {
+		option(server)
+	}
+	return server
+}
+func SetMaxFailed(maxFailed uint8) Option {
+	return func(server *Server) {
+		server.MaxFailed = maxFailed
+	}
+}
+func SetFailCallBack(failCallBack Handle) Option {
+	return func(server *Server) {
+		server.FailCallBack = failCallBack
+	}
+}
+
+//set address
+func SetAddress(address string) Option {
+	return func(server *Server) {
+		server.Address = address
+	}
+}
+
 func (s *Server) HeartBeat() {
 	if s.Fail >= s.MaxFailed {
 		if s.FailCallBack != nil {
